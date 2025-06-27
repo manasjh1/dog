@@ -1,14 +1,27 @@
 # app.py
-from flask import Flask, render_template, request, jsonify
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
 import requests
-import json # <--- ADD THIS LINE
+import json
+import uvicorn
 
 # Load environment variables from .env file
 load_dotenv()
 
-app = Flask(__name__)
+# Define the FastAPI application
+app = FastAPI(
+    title="Dog Product Recommender API",
+    description="An AI-powered service to provide personalized dog product recommendations using Groq LLMs."
+)
+
+# Mount the 'templates' directory to serve static files like index.html
+# This makes it so that when you access '/', it serves the index.html from 'templates'
+# We're also using HTMLResponse for rendering, which is more explicit for HTML content.
+app.mount("/static", StaticFiles(directory="templates"), name="static")
 
 # Get Groq API key from environment variable
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -16,15 +29,25 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY environment variable not set. Please create a .env file.")
 
-@app.route('/')
-def index():
-    """
-    Renders the main HTML page for the dog product recommender.
-    """
-    return render_template('index.html')
+# Define the request body model for the recommendation endpoint
+class RecommendationRequest(BaseModel):
+    dog_breed: str
+    diet_preference: str
+    product_type: str
 
-@app.route('/get_recommendation', methods=['POST'])
-def get_recommendation():
+@app.get("/", response_class=HTMLResponse)
+async def read_root():
+    """
+    Serves the main HTML page for the dog product recommender.
+    """
+    # For a simple single HTML file in the templates directory, we serve it directly.
+    # In a larger app, you might use FastAPI's jinja2 template engine.
+    with open("templates/index.html", "r") as f:
+        return f.read()
+
+
+@app.post("/get_recommendation")
+async def get_recommendation(request_data: RecommendationRequest):
     """
     Handles the recommendation request by calling the Groq API.
     Receives dog details from the frontend and returns a personalized
@@ -33,14 +56,13 @@ def get_recommendation():
     # Initialize llm_content outside try block for error logging
     llm_content = ""
     try:
-        data = request.get_json()
-        dog_breed = data.get('dog_breed')
-        diet_preference = data.get('diet_preference')
-        product_type = data.get('product_type')
+        dog_breed = request_data.dog_breed.strip()
+        diet_preference = request_data.diet_preference
+        product_type = request_data.product_type.strip()
 
-        # Input validation
+        # Input validation (FastAPI's BaseModel handles basic validation, but explicit checks are good)
         if not dog_breed or not product_type:
-            return jsonify({"error": "Dog breed and product type are required."}), 400
+            raise HTTPException(status_code=400, detail="Dog breed and product type are required.")
 
         # Construct the prompt for the LLM
         prompt = f"""
@@ -94,22 +116,27 @@ def get_recommendation():
         insight = parsed_llm_content.get('insight')
 
         if recommendation and insight:
-            return jsonify({"recommendation": recommendation, "insight": insight})
+            return {"recommendation": recommendation, "insight": insight}
         else:
             # Log the full LLM response if it doesn't contain expected keys
-            app.logger.warning(f"LLM response missing expected keys. Content: {llm_content}")
-            return jsonify({"error": "Could not parse recommendation or insight from LLM response. LLM might have deviated from format."}), 500
+            print(f"WARNING: LLM response missing expected keys. Content: {llm_content}") # Use print for simple logging
+            raise HTTPException(
+                status_code=500, 
+                detail="Could not parse recommendation or insight from LLM response. LLM might have deviated from format."
+            )
 
     except requests.exceptions.RequestException as e:
-        app.logger.error(f"Error calling Groq API: {e}")
-        return jsonify({"error": f"Failed to connect to recommendation service: {e}"}), 500
+        print(f"ERROR: Error calling Groq API: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to connect to recommendation service: {e}")
     except json.JSONDecodeError as e:
-        # Include the raw content that failed to parse for better debugging
-        app.logger.error(f"Error parsing LLM JSON response: {e}, Raw Content: {llm_content}")
-        return jsonify({"error": f"Failed to process LLM response. Invalid JSON from LLM: {e}"}), 500
+        print(f"ERROR: Error parsing LLM JSON response: {e}, Raw Content: {llm_content}")
+        raise HTTPException(status_code=500, detail=f"Failed to process LLM response. Invalid JSON from LLM: {e}")
     except Exception as e:
-        app.logger.error(f"An unexpected error occurred: {e}")
-        return jsonify({"error": f"An unexpected server error occurred: {e}"}), 500
+        print(f"ERROR: An unexpected error occurred: {e}")
+        raise HTTPException(status_code=500, detail=f"An unexpected server error occurred: {e}")
 
 if __name__ == '__main__':
-    app.run(debug=True) # Run in debug mode during development
+    # Get port from environment, default to 8000 for local development (FastAPI standard)
+    port = int(os.environ.get("PORT", 8000))
+    # Run Uvicorn server
+    uvicorn.run(app, host="0.0.0.0", port=port)
