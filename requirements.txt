@@ -2,5 +2,5 @@ fastapi==0.111.0
 uvicorn[standard]==0.30.1
 python-dotenv==1.0.1
 requests==2.32.3
-pydantic==2.7.4 # Reverting to Pydantic v2.x for Python 3.13 compatibility
-# typing-extensions is now managed by FastAPI and Pydantic v2's dependencies
+pydantic==2.7.4 
+python-3.11.x
